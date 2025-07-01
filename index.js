@@ -10,10 +10,6 @@ const app = express();
 
 const port = process.env.PORT || 3000;
 
-// Middleware
-app.use(cors());
-app.use(express.json());
-
 // 3. Konfigurasi koneksi database menggunakan Pool dari pg
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -24,6 +20,7 @@ const pool = new Pool({
 });
 
 // 4. Middleware untuk parsing body JSON dari request
+app.use(cors());
 app.use(express.json());
 
 // 5. Definisikan Routes (Endpoint API)
@@ -33,7 +30,7 @@ app.get("/cars", async (req, res) => {
   try {
     const result = await pool.query("SELECT * FROM cars ORDER BY id ASC");
     res.status(200).json({
-      success: true,
+      status: true,
       message: "List of cars",
       cars: result.rows,
       count: result.rowCount,
@@ -53,7 +50,7 @@ app.get("/cars/:id", async (req, res) => {
       return res.status(404).json({ message: "Car not found" });
     }
     res.status(200).json({
-      success: true,
+      status: true,
       message: "Car details",
       car: result.rows[0],
     });
@@ -77,7 +74,7 @@ app.post("/cars", async (req, res) => {
       [brand, model, year, is_available]
     );
     res.status(201).json({
-      success: true,
+      status: true,
       message: "Car added successfully",
       car: result.rows[0],
     });
@@ -105,7 +102,7 @@ app.put("/cars/:id", async (req, res) => {
       return res.status(404).json({ message: "Car not found" });
     }
     res.status(200).json({
-      success: true,
+      status: true,
       message: "Car updated successfully",
       car: result.rows[0],
     });
@@ -128,7 +125,7 @@ app.delete("/cars/:id", async (req, res) => {
     }
     res
       .status(200)
-      .json({ message: "Car deleted successfully", car: result.rows[0] });
+      .json({ message: "Car deleted statusfully", car: result.rows[0] });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Internal Server Error" });
@@ -136,8 +133,8 @@ app.delete("/cars/:id", async (req, res) => {
 });
 
 // 6. Jalankan server
-app.listen(port, () => {
-  console.log(`Server running at http://localhost:${port}`);
-});
+// app.listen(port, () => {
+//   console.log(`Server running at http://localhost:${port}`);
+// });
 
-module.exports = serverless(app);
+module.exports = app;
