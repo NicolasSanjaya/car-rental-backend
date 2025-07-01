@@ -1,8 +1,9 @@
 // 1. Impor dependensi yang diperlukan
-require("dotenv").config();
 const express = require("express");
 const { Pool } = require("pg");
 const cors = require("cors");
+const serverless = require("serverless-http");
+require("dotenv").config();
 
 // 2. Inisialisasi aplikasi Express
 const app = express();
@@ -138,3 +139,5 @@ app.delete("/cars/:id", async (req, res) => {
 app.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
 });
+
+module.exports = serverless(app);
