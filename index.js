@@ -7,6 +7,9 @@ const nodemailer = require("nodemailer");
 const { Web3 } = require("web3");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
+const { body, validationResult } = require("express-validator");
+const rateLimit = require("express-rate-limit");
 
 // 2. Inisialisasi aplikasi Express
 const app = express();
@@ -21,6 +24,249 @@ const pool = new Pool({
     rejectUnauthorized: false,
   },
 });
+
+// Rate limiting
+const contactLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // Maximum 5 requests per window
+  message: {
+    error: "Too many contact form submissions. Please try again later.",
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Validation middleware
+const validateContactForm = [
+  body("name")
+    .trim()
+    .isLength({ min: 2, max: 50 })
+    .withMessage("Name must be between 2 and 50 characters")
+    .escape(),
+
+  body("email")
+    .isEmail()
+    .normalizeEmail()
+    .withMessage("Please enter a valid email address"),
+
+  body("phone")
+    .trim()
+    .isLength({ min: 10, max: 15 })
+    .withMessage("Phone number must be between 10 and 15 characters")
+    .matches(/^[\+]?[\d\s\-\(\)]+$/)
+    .withMessage("Please enter a valid phone number"),
+
+  body("subject")
+    .trim()
+    .isLength({ min: 5, max: 100 })
+    .withMessage("Subject must be between 5 and 100 characters")
+    .escape(),
+
+  body("message")
+    .trim()
+    .isLength({ min: 10, max: 500 })
+    .withMessage("Message must be between 10 and 500 characters")
+    .escape(),
+
+  body("serviceType")
+    .isIn(["rental", "support", "feedback", "other"])
+    .withMessage("Please select a valid service type"),
+
+  body("agreeToTerms")
+    .isBoolean()
+    .custom((value) => {
+      if (value !== true) {
+        throw new Error("You must agree to the terms and conditions");
+      }
+      return true;
+    }),
+];
+
+// Email templates
+const createEmailTemplate = (data) => {
+  const serviceTypes = {
+    rental: "Car Rental Inquiry",
+    support: "Customer Support",
+    feedback: "Feedback",
+    other: "Other",
+  };
+
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Contact Form Submission</title>
+      <style>
+        body {
+          font-family: Arial, sans-serif;
+          line-height: 1.6;
+          color: #333;
+          max-width: 600px;
+          margin: 0 auto;
+          padding: 20px;
+        }
+        .header {
+          background-color: #ef4444;
+          color: white;
+          padding: 20px;
+          text-align: center;
+          border-radius: 5px 5px 0 0;
+        }
+        .content {
+          background-color: #f9f9f9;
+          padding: 30px;
+          border-radius: 0 0 5px 5px;
+        }
+        .field {
+          margin-bottom: 15px;
+          padding: 10px;
+          background-color: white;
+          border-radius: 5px;
+          border-left: 4px solid #ef4444;
+        }
+        .field-label {
+          font-weight: bold;
+          color: #ef4444;
+          margin-bottom: 5px;
+        }
+        .field-value {
+          color: #333;
+        }
+        .footer {
+          margin-top: 30px;
+          padding-top: 20px;
+          border-top: 1px solid #ddd;
+          font-size: 12px;
+          color: #666;
+          text-align: center;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="header">
+        <h1>New Contact Form Submission</h1>
+        <p>CarRental Website</p>
+      </div>
+      
+      <div class="content">
+        <div class="field">
+          <div class="field-label">Name:</div>
+          <div class="field-value">${data.name}</div>
+        </div>
+        
+        <div class="field">
+          <div class="field-label">Email:</div>
+          <div class="field-value">${data.email}</div>
+        </div>
+        
+        <div class="field">
+          <div class="field-label">Phone:</div>
+          <div class="field-value">${data.phone}</div>
+        </div>
+        
+        <div class="field">
+          <div class="field-label">Service Type:</div>
+          <div class="field-value">${serviceTypes[data.serviceType]}</div>
+        </div>
+        
+        <div class="field">
+          <div class="field-label">Subject:</div>
+          <div class="field-value">${data.subject}</div>
+        </div>
+        
+        <div class="field">
+          <div class="field-label">Message:</div>
+          <div class="field-value">${data.message}</div>
+        </div>
+        
+        <div class="field">
+          <div class="field-label">Submitted:</div>
+          <div class="field-value">${new Date().toLocaleString()}</div>
+        </div>
+      </div>
+      
+      <div class="footer">
+        <p>This email was sent from the CarRental website contact form.</p>
+        <p>Please reply directly to the customer's email: ${data.email}</p>
+      </div>
+    </body>
+    </html>
+  `;
+};
+
+// Auto-reply email template
+const createAutoReplyTemplate = (name) => {
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Thank You for Contacting Us</title>
+      <style>
+        body {
+          font-family: Arial, sans-serif;
+          line-height: 1.6;
+          color: #333;
+          max-width: 600px;
+          margin: 0 auto;
+          padding: 20px;
+        }
+        .header {
+          background-color: #ef4444;
+          color: white;
+          padding: 20px;
+          text-align: center;
+          border-radius: 5px 5px 0 0;
+        }
+        .content {
+          background-color: #f9f9f9;
+          padding: 30px;
+          border-radius: 0 0 5px 5px;
+        }
+        .footer {
+          margin-top: 30px;
+          padding-top: 20px;
+          border-top: 1px solid #ddd;
+          font-size: 12px;
+          color: #666;
+          text-align: center;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="header">
+        <h1>Thank You for Contacting Us!</h1>
+        <p>CarRental</p>
+      </div>
+      
+      <div class="content">
+        <h2>Hello ${name},</h2>
+        
+        <p>Thank you for reaching out to us. We have received your message and will get back to you as soon as possible.</p>
+        
+        <p>Our team typically responds within 24 hours during business hours:</p>
+        <ul>
+          <li>Monday - Friday: 8:00 AM - 8:00 PM</li>
+          <li>Saturday - Sunday: 9:00 AM - 6:00 PM</li>
+        </ul>
+        
+        <p>If you need immediate assistance, please don't hesitate to call our emergency support line at <strong>+1 (555) 911-HELP</strong>.</p>
+        
+        <p>Best regards,<br>
+        The CarRental Team</p>
+      </div>
+      
+      <div class="footer">
+        <p>CarRental | 123 Main Street, City, State 12345</p>
+        <p>Phone: +1 (555) 123-4567 | Email: info@carrental.com</p>
+      </div>
+    </body>
+    </html>
+  `;
+};
 
 // Konfigurasi Web3 untuk Ethereum Sepolia
 
@@ -548,6 +794,14 @@ app.post("/api/auth/register", async (req, res) => {
       { expiresIn: "24h" }
     );
 
+    // Simpan token di HTTP-only cookie
+    res.cookie("token", token, {
+      httpOnly: true, // Cookie tidak bisa diakses oleh JavaScript sisi klien
+      secure: true, // Hanya kirim melalui HTTPS di lingkungan produksi
+      sameSite: "strict", // Proteksi dari serangan CSRF
+      maxAge: 3600000 * 24, // Masa berlaku cookie (1 jam dalam milidetik)
+    });
+
     res.status(201).json({
       success: true,
       message: "User registered successfully",
@@ -626,6 +880,14 @@ app.post("/api/auth/login", async (req, res) => {
       { expiresIn: "24h" }
     );
 
+    // Simpan token di HTTP-only cookie
+    res.cookie("token", token, {
+      httpOnly: true, // Cookie tidak bisa diakses oleh JavaScript sisi klien
+      secure: true, // Hanya kirim melalui HTTPS di lingkungan produksi
+      sameSite: "strict", // Proteksi dari serangan CSRF
+      maxAge: 3600000 * 24, // Masa berlaku cookie (1 jam dalam milidetik)
+    });
+
     res.json({
       success: true,
       message: "Login successful",
@@ -688,6 +950,7 @@ app.get("/api/auth/profile", authenticateToken, async (req, res) => {
 
 // Route: Logout - PERBAIKAN: Pastikan path tidak mengandung karakter khusus
 app.post("/api/auth/logout", authenticateToken, (req, res) => {
+  res.clearCookie("token");
   res.json({
     success: true,
     message: "Logout successful",
@@ -722,6 +985,377 @@ app.post("/api/auth/refresh", authenticateToken, (req, res) => {
     });
   }
 });
+
+// POST /api/auth/forgot-password
+app.post("/api/auth/forgot-password", async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    // Validasi input
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: "Email is required",
+      });
+    }
+
+    // Validasi format email
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({
+        success: false,
+        message: "Please enter a valid email address",
+      });
+    }
+
+    // Cari user berdasarkan email
+    const userResult = await pool.query(
+      "SELECT uid, full_name, email, created_at FROM users WHERE email = $1",
+      [email]
+    );
+
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    const user = userResult.rows[0];
+    if (!user) {
+      // Jangan berikan informasi bahwa email tidak ditemukan (security best practice)
+      return res.status(200).json({
+        success: true,
+        message:
+          "If an account with that email exists, we have sent a password reset link",
+      });
+    }
+
+    // Generate reset token
+    const resetToken = crypto.randomBytes(32).toString("hex");
+    const resetTokenExpiry = new Date(Date.now() + 60 * 60 * 1000); // 1 jam dari sekarang
+
+    // Simpan token dan expiry ke database
+    const updateQuery = `
+      UPDATE users 
+      SET reset_password_token = $1, reset_password_expiry = $2
+      WHERE uid = $3
+    `;
+    await pool.query(updateQuery, [resetToken, resetTokenExpiry, user.uid]);
+
+    // Buat reset URL
+    const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`;
+
+    // Template email
+    const mailOptions = {
+      from: `"Reset Password" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: "Password Reset Request",
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #333;">Password Reset Request</h2>
+          <p>Hello,</p>
+          <p>You have requested to reset your password. Click the button below to reset your password:</p>
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${resetUrl}" style="background-color: #ef4444; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
+              Reset Password
+            </a>
+          </div>
+          <p>If the button doesn't work, copy and paste the following link into your browser:</p>
+          <p style="word-break: break-all; color: #666;">${resetUrl}</p>
+          <p style="margin-top: 30px; color: #666; font-size: 14px;">
+            This link will expire in 1 hour. If you didn't request this password reset, please ignore this email.
+          </p>
+        </div>
+      `,
+    };
+
+    // Kirim email
+    await transporter.sendMail(mailOptions);
+
+    res.status(200).json({
+      success: true,
+      message: "Password reset email sent successfully",
+    });
+  } catch (error) {
+    console.error("Forgot password error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+});
+
+// POST /api/auth/reset-password
+app.post("/api/auth/reset-password", async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+
+    // Validasi input
+    if (!token || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "Token and new password are required",
+      });
+    }
+
+    // Validasi password strength
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: "Password must be at least 6 characters long",
+      });
+    }
+
+    // Cari user berdasarkan token yang masih valid
+    const userQuery = `
+      SELECT * FROM users 
+      WHERE reset_password_token = $1 
+      AND reset_password_expiry > NOW()
+    `;
+    const userResult = await pool.query(userQuery, [token]);
+
+    if (userResult.rows.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid or expired reset token",
+      });
+    }
+
+    const user = userResult.rows[0];
+
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid or expired reset token",
+      });
+    }
+
+    // Hash password baru
+    const saltRounds = 10;
+    const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
+
+    const updateQuery = `
+      UPDATE users 
+      SET password_hash = $1, reset_password_token = $2, reset_password_expiry = $3
+      WHERE uid = $4
+    `;
+    await pool.query(updateQuery, [hashedPassword, null, null, user.uid]);
+
+    res.status(200).json({
+      success: true,
+      message: "Password reset successful",
+    });
+  } catch (error) {
+    console.error("Reset password error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+});
+
+app.post(
+  "/api/contact",
+  contactLimiter,
+  validateContactForm,
+  async (req, res) => {
+    try {
+      // Check validation results
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          success: false,
+          message: "Validation failed",
+          errors: errors.array(),
+        });
+      }
+
+      const {
+        name,
+        email,
+        phone,
+        subject,
+        message,
+        serviceType,
+        agreeToTerms,
+      } = req.body;
+
+      // Verify required environment variables
+      if (!process.env.EMAIL_PASSWORD) {
+        console.error("Gmail credentials not configured");
+        return res.status(500).json({
+          success: false,
+          message: "Email service not configured",
+        });
+      }
+
+      // Email options for admin notification
+      const adminMailOptions = {
+        from: `"Turbo Rent" <${process.env.EMAIL_USER}>`,
+        to: email,
+        subject: `New Contact Form: ${subject}`,
+        html: createEmailTemplate({
+          name,
+          email,
+          phone,
+          subject,
+          message,
+          serviceType,
+        }),
+        replyTo: email,
+      };
+
+      // Email options for auto-reply
+      const autoReplyOptions = {
+        from: process.env.EMAIL_USER,
+        to: email,
+        subject: "Thank you for contacting CarRental",
+        html: createAutoReplyTemplate(name),
+      };
+
+      // Send emails
+      const [adminResult, autoReplyResult] = await Promise.all([
+        transporter.sendMail(adminMailOptions),
+        transporter.sendMail(autoReplyOptions),
+      ]);
+
+      console.log("Admin email sent:", adminResult.messageId);
+      console.log("Auto-reply sent:", autoReplyResult.messageId);
+
+      res.json({
+        success: true,
+        message: "Message sent successfully! We'll get back to you soon.",
+        data: {
+          messageId: adminResult.messageId,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    } catch (error) {
+      console.error("Contact form error:", error);
+
+      // Handle specific errors
+      if (error.code === "EAUTH") {
+        return res.status(500).json({
+          success: false,
+          message: "Email authentication failed",
+        });
+      }
+
+      if (error.code === "ECONNECTION") {
+        return res.status(500).json({
+          success: false,
+          message: "Unable to connect to email service",
+        });
+      }
+
+      res.status(500).json({
+        success: false,
+        message: "Failed to send message. Please try again later.",
+      });
+    }
+  }
+);
+
+// Update user profile
+app.put("/api/profile/update", authenticateToken, async (req, res) => {
+  try {
+    const { full_name, email, id } = req.body;
+
+    // Validate input
+    if (!full_name || !email) {
+      return res
+        .status(400)
+        .json({ message: "Full name and email are required" });
+    }
+
+    // Check if email is already taken by another user
+    const existingUser = await pool.query(
+      "SELECT * FROM users WHERE email = $1 AND uid != $2",
+      [email, id]
+    );
+
+    if (existingUser.rows.length > 0) {
+      return res
+        .status(400)
+        .json({ message: "Email is already taken by another user" });
+    }
+
+    // Update user
+    const result = await pool.query(
+      "UPDATE users SET full_name = $1, email = $2 WHERE uid = $3 RETURNING uid, full_name, email",
+      [full_name, email, id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const user = result.rows[0];
+    res.json({
+      message: "Profile updated successfully",
+      user,
+    });
+  } catch (err) {
+    console.error("Profile update error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Change password
+app.put("/api/profile/change-password", authenticateToken, async (req, res) => {
+  try {
+    const { current_password, new_password, id } = req.body;
+
+    // Validate input
+    if (!current_password || !new_password) {
+      return res
+        .status(400)
+        .json({ message: "Current password and new password are required" });
+    }
+
+    if (new_password.length < 6) {
+      return res
+        .status(400)
+        .json({ message: "New password must be at least 6 characters long" });
+    }
+
+    // Get current user
+    const userResult = await pool.query("SELECT * FROM users WHERE uid = $1", [
+      id,
+    ]);
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const user = userResult.rows[0];
+
+    // Verify current password
+    const isValidPassword = await bcrypt.compare(
+      current_password,
+      user.password_hash
+    );
+    if (!isValidPassword) {
+      return res.status(401).json({ message: "Current password is incorrect" });
+    }
+
+    // Hash new password
+    const saltRounds = 10;
+    const hashedNewPassword = await bcrypt.hash(new_password, saltRounds);
+
+    // Update password
+    await pool.query("UPDATE users SET password_hash = $1 WHERE uid = $2", [
+      hashedNewPassword,
+      id,
+    ]);
+
+    res.json({ message: "Password changed successfully" });
+  } catch (err) {
+    console.error("Password change error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error(err.stack);
