@@ -25,6 +25,15 @@ const pool = new Pool({
   },
 });
 
+// Test database connection
+pool.query("SELECT NOW()", (err, res) => {
+  if (err) {
+    console.error("Database connection error:", err);
+  } else {
+    console.log("Connected to Neon PostgreSQL database");
+  }
+});
+
 // Rate limiting
 const contactLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -282,7 +291,12 @@ const transporter = nodemailer.createTransport({
 });
 
 // 4. Middleware untuk parsing body JSON dari request
-app.use(cors());
+app.use(
+  cors({
+    origin: process.env.FRONTEND_URL || "http://localhost:3000",
+    credentials: true, // Izinkan cookie untuk dikirim
+  })
+);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -846,7 +860,7 @@ app.post("/api/auth/login", async (req, res) => {
 
     // Cari user berdasarkan email
     const userResult = await pool.query(
-      "SELECT uid, full_name, email, password_hash, created_at FROM users WHERE email = $1",
+      "SELECT uid, full_name, email, password_hash, role, created_at FROM users WHERE email = $1",
       [email.toLowerCase().trim()]
     );
 
@@ -888,19 +902,44 @@ app.post("/api/auth/login", async (req, res) => {
       maxAge: 3600000 * 24, // Masa berlaku cookie (1 jam dalam milidetik)
     });
 
-    res.json({
-      success: true,
-      message: "Login successful",
-      data: {
-        user: {
-          uid: user.uid,
-          full_name: user.full_name,
-          email: user.email,
-          created_at: user.created_at,
+    if (user.role === "admin") {
+      res.cookie("role", "admin", {
+        path: "/",
+        httpOnly: false, // Cookie tidak bisa diakses oleh JavaScript sisi klien
+        // secure: true, // Hanya kirim melalui HTTPS di lingkungan produksi
+        // sameSite: "strict", // Proteksi dari serangan CSRF
+        // maxAge: 3600000 * 24, // Masa berlaku cookie (1 jam dalam milidetik)
+      });
+      return res.json({
+        success: true,
+        message: "Login successful",
+        data: {
+          user: {
+            uid: user.uid,
+            full_name: user.full_name,
+            email: user.email,
+            role: user.role,
+            created_at: user.created_at,
+          },
+          token,
         },
-        token,
-      },
-    });
+      });
+    } else if (user.role === "user") {
+      return res.json({
+        success: true,
+        message: "Login successful",
+        data: {
+          user: {
+            uid: user.uid,
+            full_name: user.full_name,
+            email: user.email,
+            role: user.role,
+            created_at: user.created_at,
+          },
+          token,
+        },
+      });
+    }
   } catch (error) {
     console.error("Login error:", error);
     res.status(500).json({
@@ -914,7 +953,7 @@ app.post("/api/auth/login", async (req, res) => {
 app.get("/api/auth/profile", authenticateToken, async (req, res) => {
   try {
     const userResult = await pool.query(
-      "SELECT uid, full_name, email, created_at FROM users WHERE uid = $1",
+      "SELECT uid, full_name, email, created_at, role FROM users WHERE uid = $1",
       [req.user.uid]
     );
 
@@ -927,18 +966,35 @@ app.get("/api/auth/profile", authenticateToken, async (req, res) => {
 
     const user = userResult.rows[0];
 
-    res.json({
-      success: true,
-      message: "Profile retrieved successfully",
-      data: {
-        user: {
-          uid: user.uid,
-          full_name: user.full_name,
-          email: user.email,
-          created_at: user.created_at,
+    if (user.role === "admin") {
+      return res.json({
+        success: true,
+        message: "Profile retrieved successfully",
+        data: {
+          user: {
+            uid: user.uid,
+            full_name: user.full_name,
+            email: user.email,
+            role: user.role,
+            created_at: user.created_at,
+          },
         },
-      },
-    });
+      });
+    } else if (user.role === "user") {
+      return res.json({
+        success: true,
+        message: "Profile retrieved successfully",
+        data: {
+          user: {
+            uid: user.uid,
+            full_name: user.full_name,
+            email: user.email,
+            role: user.role,
+            created_at: user.created_at,
+          },
+        },
+      });
+    }
   } catch (error) {
     console.error("Profile error:", error);
     res.status(500).json({
@@ -951,6 +1007,7 @@ app.get("/api/auth/profile", authenticateToken, async (req, res) => {
 // Route: Logout - PERBAIKAN: Pastikan path tidak mengandung karakter khusus
 app.post("/api/auth/logout", authenticateToken, (req, res) => {
   res.clearCookie("token");
+  res.clearCookie("role"); // Hapus cookie role jika ada
   res.json({
     success: true,
     message: "Logout successful",
@@ -1352,6 +1409,540 @@ app.put("/api/profile/change-password", authenticateToken, async (req, res) => {
     res.json({ message: "Password changed successfully" });
   } catch (err) {
     console.error("Password change error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Booking Routes
+app.post("/api/bookings", authenticateToken, async (req, res) => {
+  try {
+    const {
+      carId,
+      startDate,
+      endDate,
+      fullName,
+      email,
+      phoneNumber,
+      payment,
+      txHash,
+    } = req.body;
+
+    // Validate required fields
+    if (
+      !carId ||
+      !startDate ||
+      !endDate ||
+      !fullName ||
+      !email ||
+      !phoneNumber ||
+      !payment
+    ) {
+      return res.status(400).json({ error: "All fields are required" });
+    }
+
+    // Check if car exists and is available
+    const car = await pool.query(
+      "SELECT * FROM cars WHERE car_id = $1 AND available = true",
+      [carId]
+    );
+    if (car.rows.length === 0) {
+      return res.status(404).json({ error: "Car not found or not available" });
+    }
+
+    // Check for booking conflicts
+    const conflictingBookings = await pool.query(
+      `SELECT * FROM bookings 
+       WHERE car_id = $1 
+       AND (
+         (start_date <= $2 AND end_date >= $2) OR
+         (start_date <= $3 AND end_date >= $3) OR
+         (start_date >= $2 AND end_date <= $3)
+       )`,
+      [carId, startDate, endDate]
+    );
+
+    if (conflictingBookings.rows.length > 0) {
+      return res
+        .status(409)
+        .json({ error: "Car is already booked for the selected dates" });
+    }
+
+    // Calculate total price
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    const days = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+    const totalPrice = days * parseFloat(car.rows[0].price_per_day);
+
+    // Generate booking ID
+    const bookingId = uuidv4();
+
+    // Create booking
+    const newBooking = await pool.query(
+      `INSERT INTO bookings (
+        id, uid, car_id, start_date, end_date, full_name, email, phone_number, 
+        payment, is_paid, tx_hash, total_price
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) 
+      RETURNING *`,
+      [
+        bookingId,
+        req.user.uid,
+        carId,
+        startDate,
+        endDate,
+        fullName,
+        email,
+        phoneNumber,
+        payment,
+        payment === "metamask" && txHash ? true : false,
+        txHash || null,
+        totalPrice,
+      ]
+    );
+
+    res.status(201).json({
+      message: "Booking created successfully",
+      booking: newBooking.rows[0],
+    });
+  } catch (error) {
+    console.error("Error creating booking:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.get("/api/bookings/user/:uid", authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.params;
+
+    // Ensure user can only access their own bookings
+    // if (req.user.uid !== uid) {
+    //   return res.status(403).json({ error: "Access denied" });
+    // }
+
+    // const bookings = await pool.query(
+    //   `SELECT
+    //     b.*,
+    //     c.model as car_name,
+    //     c.brand as car_brand,
+    //     c.image as car_image
+    //   FROM booking b
+    //   JOIN cars c ON b.car_id = c.id
+    //   WHERE b.uid = $1
+    //   ORDER BY b.created_at DESC`,
+    //   [uid]
+    // );
+    const bookings = await pool.query(
+      `SELECT 
+        b.*,
+        c.model as car_name,
+        c.brand as car_brand,
+        c.image as car_image
+      FROM booking b
+      JOIN cars c ON b.car_id = c.id
+      WHERE b.uid = $1
+      ORDER BY b.uid DESC`,
+      [uid]
+    );
+
+    return res.json({ bookings: bookings.rows });
+  } catch (error) {
+    console.error("Error fetching user bookings:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.get("/api/bookings/:bookingId", authenticateToken, async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+
+    const booking = await pool.query(
+      `SELECT 
+        b.*,
+        c.name as car_name,
+        c.brand as car_brand,
+        c.image_url as car_image
+      FROM bookings b
+      JOIN cars c ON b.car_id = c.car_id
+      WHERE b.id = $1`,
+      [bookingId]
+    );
+
+    if (booking.rows.length === 0) {
+      return res.status(404).json({ error: "Booking not found" });
+    }
+
+    // Ensure user can only access their own bookings
+    if (req.user.uid !== booking.rows[0].uid) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    res.json({ booking: booking.rows[0] });
+  } catch (error) {
+    console.error("Error fetching booking:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.put(
+  "/api/bookings/:bookingId/payment",
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const { bookingId } = req.params;
+      const { txHash, isPaid } = req.body;
+
+      // Check if booking exists and belongs to user
+      const booking = await pool.query(
+        "SELECT * FROM bookings WHERE id = $1 AND uid = $2",
+        [bookingId, req.user.uid]
+      );
+
+      if (booking.rows.length === 0) {
+        return res.status(404).json({ error: "Booking not found" });
+      }
+
+      // Update payment status
+      const updatedBooking = await pool.query(
+        `UPDATE bookings 
+       SET is_paid = $1, tx_hash = $2, updated_at = CURRENT_TIMESTAMP 
+       WHERE id = $3 AND uid = $4 
+       RETURNING *`,
+        [isPaid, txHash, bookingId, req.user.uid]
+      );
+
+      res.json({
+        message: "Payment status updated successfully",
+        booking: updatedBooking.rows[0],
+      });
+    } catch (error) {
+      console.error("Error updating payment status:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
+
+app.delete("/api/bookings/:bookingId", authenticateToken, async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+
+    // Check if booking exists and belongs to user
+    const booking = await pool.query(
+      "SELECT * FROM bookings WHERE id = $1 AND uid = $2",
+      [bookingId, req.user.uid]
+    );
+
+    if (booking.rows.length === 0) {
+      return res.status(404).json({ error: "Booking not found" });
+    }
+
+    // Delete booking
+    await pool.query("DELETE FROM bookings WHERE id = $1 AND uid = $2", [
+      bookingId,
+      req.user.uid,
+    ]);
+
+    res.json({ message: "Booking cancelled successfully" });
+  } catch (error) {
+    console.error("Error cancelling booking:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Admin Routes (for managing cars and bookings)
+app.post("/api/admin/cars", authenticateToken, async (req, res) => {
+  try {
+    const {
+      name,
+      brand,
+      model,
+      year,
+      pricePerDay,
+      imageUrl,
+      description,
+      features,
+      transmission,
+      fuelType,
+      seats,
+    } = req.body;
+
+    const carId = uuidv4();
+
+    const newCar = await pool.query(
+      `INSERT INTO cars (
+        car_id, name, brand, model, year, price_per_day, image_url, 
+        description, features, transmission, fuel_type, seats
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) 
+      RETURNING *`,
+      [
+        carId,
+        name,
+        brand,
+        model,
+        year,
+        pricePerDay,
+        imageUrl,
+        description,
+        features,
+        transmission,
+        fuelType,
+        seats,
+      ]
+    );
+
+    res.status(201).json({
+      message: "Car added successfully",
+      car: newCar.rows[0],
+    });
+  } catch (error) {
+    console.error("Error adding car:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Admin
+// Get all bookings (Admin)
+app.get("/api/admin/bookings", authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        b.*,
+        c.model as car_name,
+        c.brand as car_brand,
+        c.image as car_image
+      FROM booking b
+      LEFT JOIN cars c ON b.car_id = c.id
+    `);
+
+    console.log("Bookings fetched successfully:", result.rows);
+
+    res.json({
+      success: true,
+      bookings: result.rows,
+    });
+  } catch (error) {
+    console.error("Error fetching bookings:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Update booking status (Admin)
+app.put(
+  "/api/admin/bookings/:id/status",
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { is_paid } = req.body;
+
+      const result = await pool.query(
+        "UPDATE bookings SET is_paid = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *",
+        [is_paid, id]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({ message: "Booking not found" });
+      }
+
+      res.json({
+        success: true,
+        message: "Booking status updated successfully",
+        booking: result.rows[0],
+      });
+    } catch (error) {
+      console.error("Error updating booking status:", error);
+      res.status(500).json({ message: "Server error" });
+    }
+  }
+);
+
+// Delete booking (Admin)
+app.delete("/api/admin/bookings/:id", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    console.log("Deleting booking with ID:", id);
+
+    const result = await pool.query(
+      "DELETE FROM booking WHERE uid = $1 RETURNING *",
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: "Booking not found" });
+    }
+
+    res.json({
+      success: true,
+      message: "Booking deleted successfully",
+    });
+  } catch (error) {
+    console.error("Error deleting booking:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Get all cars
+app.get("/api/cars", async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT * FROM cars ORDER BY created_at DESC"
+    );
+
+    res.json({
+      success: true,
+      cars: result.rows,
+    });
+  } catch (error) {
+    console.error("Error fetching cars:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Get available cars
+app.get("/api/cars/available", async (req, res) => {
+  try {
+    const { start_date, end_date } = req.query;
+
+    let query = `
+      SELECT * FROM cars 
+      WHERE available = true
+    `;
+
+    const params = [];
+
+    if (start_date && end_date) {
+      query += ` AND car_id NOT IN (
+        SELECT car_id FROM bookings 
+        WHERE (start_date <= $1 AND end_date >= $2)
+        OR (start_date <= $3 AND end_date >= $4)
+        OR (start_date >= $5 AND end_date <= $6)
+      )`;
+      params.push(
+        end_date,
+        start_date,
+        start_date,
+        end_date,
+        start_date,
+        end_date
+      );
+    }
+
+    query += " ORDER BY created_at DESC";
+
+    const result = await pool.query(query, params);
+
+    res.json({
+      success: true,
+      cars: result.rows,
+    });
+  } catch (error) {
+    console.error("Error fetching available cars:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Add new car (Admin)
+app.post("/api/admin/cars", authenticateToken, async (req, res) => {
+  try {
+    const { name, brand, price_per_day, image_url } = req.body;
+    const car_id = uuidv4();
+
+    const result = await pool.query(
+      `INSERT INTO cars (car_id, name, brand, price_per_day, image_url, available, created_at) 
+       VALUES ($1, $2, $3, $4, $5, true, CURRENT_TIMESTAMP) RETURNING *`,
+      [car_id, name, brand, price_per_day, image_url]
+    );
+
+    res.status(201).json({
+      success: true,
+      message: "Car added successfully",
+      car: result.rows[0],
+    });
+  } catch (error) {
+    console.error("Error adding car:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Update car (Admin)
+app.put("/api/admin/cars/:id", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, brand, price_per_day, image_url, available } = req.body;
+
+    const result = await pool.query(
+      `UPDATE cars SET name = $1, brand = $2, price_per_day = $3, image_url = $4, available = $5 
+       WHERE car_id = $6 RETURNING *`,
+      [name, brand, price_per_day, image_url, available, id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: "Car not found" });
+    }
+
+    res.json({
+      success: true,
+      message: "Car updated successfully",
+      car: result.rows[0],
+    });
+  } catch (error) {
+    console.error("Error updating car:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Delete car (Admin)
+app.delete("/api/admin/cars/:id", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await pool.query(
+      "DELETE FROM cars WHERE car_id = $1 RETURNING *",
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: "Car not found" });
+    }
+
+    res.json({
+      success: true,
+      message: "Car deleted successfully",
+    });
+  } catch (error) {
+    console.error("Error deleting car:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Dashboard stats (Admin)
+app.get("/api/admin/stats", authenticateToken, async (req, res) => {
+  try {
+    const [bookingsResult, carsResult] = await Promise.all([
+      pool.query(
+        "SELECT COUNT(*) as total, SUM(total_price) as revenue, SUM(CASE WHEN is_paid = true THEN 1 ELSE 0 END) as paid FROM bookings"
+      ),
+      pool.query(
+        "SELECT COUNT(*) as total, SUM(CASE WHEN available = true THEN 1 ELSE 0 END) as available FROM cars"
+      ),
+    ]);
+
+    const bookingStats = bookingsResult.rows[0];
+    const carStats = carsResult.rows[0];
+
+    res.json({
+      success: true,
+      stats: {
+        totalBookings: parseInt(bookingStats.total),
+        totalRevenue: parseFloat(bookingStats.revenue || 0),
+        paidBookings: parseInt(bookingStats.paid),
+        pendingBookings:
+          parseInt(bookingStats.total) - parseInt(bookingStats.paid),
+        totalCars: parseInt(carStats.total),
+        availableCars: parseInt(carStats.available),
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching stats:", error);
     res.status(500).json({ message: "Server error" });
   }
 });
