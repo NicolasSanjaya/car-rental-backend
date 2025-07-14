@@ -11,6 +11,8 @@ const crypto = require("crypto");
 const { body, validationResult } = require("express-validator");
 const rateLimit = require("express-rate-limit");
 const midtransClient = require("midtrans-client");
+const multer = require("multer");
+const cloudinary = require("cloudinary").v2;
 
 // 2. Inisialisasi aplikasi Express
 const app = express();
@@ -25,6 +27,55 @@ const pool = new Pool({
     rejectUnauthorized: false,
   },
 });
+
+// Cloudinary configuration
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+// Multer configuration for file uploads
+const storage = multer.memoryStorage();
+const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith("image/")) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only image files are allowed!"), false);
+    }
+  },
+});
+
+// Helper function to upload image to Cloudinary
+const uploadToCloudinary = (buffer, originalName) => {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      {
+        resource_type: "image",
+        folder: "car-rental/cars",
+        public_id: `car_${Date.now()}`,
+        transformation: [
+          { width: 800, height: 600, crop: "fill" },
+          { quality: "auto" },
+          { fetch_format: "auto" },
+        ],
+      },
+      (error, result) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve(result.secure_url);
+        }
+      }
+    );
+    stream.end(buffer);
+  });
+};
 
 // Test database connection
 pool.query("SELECT NOW()", (err, res) => {
@@ -606,7 +657,6 @@ app.delete("/cars/:id", async (req, res) => {
 app.post("/api/payment", async (req, res) => {
   try {
     const { paymentData } = req.body;
-    console.log("Received payment data:", paymentData);
     if (paymentData === undefined) {
       res.status(400).json({
         error: "Payment data is required",
@@ -775,7 +825,7 @@ app.post("/api/auth/register", async (req, res) => {
 
     // Cek apakah email sudah terdaftar
     const existingUser = await pool.query(
-      "SELECT uid FROM users WHERE email = $1",
+      "SELECT id FROM users WHERE email = $1",
       [email.toLowerCase().trim()]
     );
 
@@ -792,7 +842,7 @@ app.post("/api/auth/register", async (req, res) => {
 
     // Insert user baru
     const newUser = await pool.query(
-      "INSERT INTO users (full_name, email, password_hash) VALUES ($1, $2, $3) RETURNING uid, full_name, email, created_at",
+      "INSERT INTO users (full_name, email, password_hash) VALUES ($1, $2, $3) RETURNING id, full_name, email, created_at",
       [full_name.trim(), email.toLowerCase().trim(), password_hash]
     );
 
@@ -801,7 +851,7 @@ app.post("/api/auth/register", async (req, res) => {
     // Generate JWT token
     const token = jwt.sign(
       {
-        uid: user.uid,
+        id: user.id,
         email: user.email,
         full_name: user.full_name,
       },
@@ -822,7 +872,7 @@ app.post("/api/auth/register", async (req, res) => {
       message: "User registered successfully",
       data: {
         user: {
-          uid: user.uid,
+          id: user.id,
           full_name: user.full_name,
           email: user.email,
           created_at: user.created_at,
@@ -861,7 +911,7 @@ app.post("/api/auth/login", async (req, res) => {
 
     // Cari user berdasarkan email
     const userResult = await pool.query(
-      "SELECT uid, full_name, email, password_hash, role, created_at FROM users WHERE email = $1",
+      "SELECT id, full_name, email, password_hash, role, created_at FROM users WHERE email = $1",
       [email.toLowerCase().trim()]
     );
 
@@ -887,7 +937,7 @@ app.post("/api/auth/login", async (req, res) => {
     // Generate JWT token
     const token = jwt.sign(
       {
-        uid: user.uid,
+        id: user.id,
         email: user.email,
         full_name: user.full_name,
       },
@@ -916,7 +966,7 @@ app.post("/api/auth/login", async (req, res) => {
         message: "Login successful",
         data: {
           user: {
-            uid: user.uid,
+            id: user.id,
             full_name: user.full_name,
             email: user.email,
             role: user.role,
@@ -931,7 +981,7 @@ app.post("/api/auth/login", async (req, res) => {
         message: "Login successful",
         data: {
           user: {
-            uid: user.uid,
+            id: user.id,
             full_name: user.full_name,
             email: user.email,
             role: user.role,
@@ -954,8 +1004,8 @@ app.post("/api/auth/login", async (req, res) => {
 app.get("/api/auth/profile", authenticateToken, async (req, res) => {
   try {
     const userResult = await pool.query(
-      "SELECT uid, full_name, email, created_at, role FROM users WHERE uid = $1",
-      [req.user.uid]
+      "SELECT id, full_name, email, created_at, role FROM users WHERE id = $1",
+      [req.user.id]
     );
 
     if (userResult.rows.length === 0) {
@@ -973,7 +1023,7 @@ app.get("/api/auth/profile", authenticateToken, async (req, res) => {
         message: "Profile retrieved successfully",
         data: {
           user: {
-            uid: user.uid,
+            id: user.id,
             full_name: user.full_name,
             email: user.email,
             role: user.role,
@@ -987,7 +1037,7 @@ app.get("/api/auth/profile", authenticateToken, async (req, res) => {
         message: "Profile retrieved successfully",
         data: {
           user: {
-            uid: user.uid,
+            id: user.id,
             full_name: user.full_name,
             email: user.email,
             role: user.role,
@@ -1020,7 +1070,7 @@ app.post("/api/auth/refresh", authenticateToken, (req, res) => {
   try {
     const newToken = jwt.sign(
       {
-        uid: req.user.uid,
+        id: req.user.id,
         email: req.user.email,
         full_name: req.user.full_name,
       },
@@ -1068,7 +1118,7 @@ app.post("/api/auth/forgot-password", async (req, res) => {
 
     // Cari user berdasarkan email
     const userResult = await pool.query(
-      "SELECT uid, full_name, email, created_at FROM users WHERE email = $1",
+      "SELECT id, full_name, email, created_at FROM users WHERE email = $1",
       [email]
     );
 
@@ -1097,9 +1147,9 @@ app.post("/api/auth/forgot-password", async (req, res) => {
     const updateQuery = `
       UPDATE users 
       SET reset_password_token = $1, reset_password_expiry = $2
-      WHERE uid = $3
+      WHERE id = $3
     `;
-    await pool.query(updateQuery, [resetToken, resetTokenExpiry, user.uid]);
+    await pool.query(updateQuery, [resetToken, resetTokenExpiry, user.id]);
 
     // Buat reset URL
     const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`;
@@ -1196,9 +1246,9 @@ app.post("/api/auth/reset-password", async (req, res) => {
     const updateQuery = `
       UPDATE users 
       SET password_hash = $1, reset_password_token = $2, reset_password_expiry = $3
-      WHERE uid = $4
+      WHERE id = $4
     `;
-    await pool.query(updateQuery, [hashedPassword, null, null, user.uid]);
+    await pool.query(updateQuery, [hashedPassword, null, null, user.id]);
 
     res.status(200).json({
       success: true,
@@ -1329,7 +1379,7 @@ app.put("/api/profile/update", authenticateToken, async (req, res) => {
 
     // Check if email is already taken by another user
     const existingUser = await pool.query(
-      "SELECT * FROM users WHERE email = $1 AND uid != $2",
+      "SELECT * FROM users WHERE email = $1 AND id != $2",
       [email, id]
     );
 
@@ -1341,7 +1391,7 @@ app.put("/api/profile/update", authenticateToken, async (req, res) => {
 
     // Update user
     const result = await pool.query(
-      "UPDATE users SET full_name = $1, email = $2 WHERE uid = $3 RETURNING uid, full_name, email",
+      "UPDATE users SET full_name = $1, email = $2 WHERE id = $3 RETURNING id, full_name, email",
       [full_name, email, id]
     );
 
@@ -1379,7 +1429,7 @@ app.put("/api/profile/change-password", authenticateToken, async (req, res) => {
     }
 
     // Get current user
-    const userResult = await pool.query("SELECT * FROM users WHERE uid = $1", [
+    const userResult = await pool.query("SELECT * FROM users WHERE id = $1", [
       id,
     ]);
     if (userResult.rows.length === 0) {
@@ -1402,7 +1452,7 @@ app.put("/api/profile/change-password", authenticateToken, async (req, res) => {
     const hashedNewPassword = await bcrypt.hash(new_password, saltRounds);
 
     // Update password
-    await pool.query("UPDATE users SET password_hash = $1 WHERE uid = $2", [
+    await pool.query("UPDATE users SET password_hash = $1 WHERE id = $2", [
       hashedNewPassword,
       id,
     ]);
@@ -1475,18 +1525,18 @@ app.post("/api/bookings", authenticateToken, async (req, res) => {
     const totalPrice = days * parseFloat(car.rows[0].price_per_day);
 
     // Generate booking ID
-    const bookingId = uuidv4();
+    const bookingId = uidv4();
 
     // Create booking
     const newBooking = await pool.query(
       `INSERT INTO bookings (
-        id, uid, car_id, start_date, end_date, full_name, email, phone_number, 
+        id, id, car_id, start_date, end_date, full_name, email, phone_number, 
         payment, is_paid, tx_hash, total_price
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) 
       RETURNING *`,
       [
         bookingId,
-        req.user.uid,
+        req.user.id,
         carId,
         startDate,
         endDate,
@@ -1510,38 +1560,21 @@ app.post("/api/bookings", authenticateToken, async (req, res) => {
   }
 });
 
-app.get("/api/bookings/user/:uid", authenticateToken, async (req, res) => {
+app.get("/api/bookings/user/:id", authenticateToken, async (req, res) => {
   try {
-    const { uid } = req.params;
+    const { id } = req.params;
 
-    // Ensure user can only access their own bookings
-    // if (req.user.uid !== uid) {
-    //   return res.status(403).json({ error: "Access denied" });
-    // }
-
-    // const bookings = await pool.query(
-    //   `SELECT
-    //     b.*,
-    //     c.model as car_name,
-    //     c.brand as car_brand,
-    //     c.image as car_image
-    //   FROM booking b
-    //   JOIN cars c ON b.car_id = c.id
-    //   WHERE b.uid = $1
-    //   ORDER BY b.created_at DESC`,
-    //   [uid]
-    // );
     const bookings = await pool.query(
       `SELECT 
         b.*,
         c.model as car_name,
         c.brand as car_brand,
         c.image as car_image
-      FROM booking b
+      FROM bookings b
       JOIN cars c ON b.car_id = c.id
-      WHERE b.uid = $1
-      ORDER BY b.uid DESC`,
-      [uid]
+      WHERE b.user_id = $1
+      ORDER BY b.created_at DESC`,
+      [id]
     );
 
     return res.json({ bookings: bookings.rows });
@@ -1572,7 +1605,7 @@ app.get("/api/bookings/:bookingId", authenticateToken, async (req, res) => {
     }
 
     // Ensure user can only access their own bookings
-    if (req.user.uid !== booking.rows[0].uid) {
+    if (req.user.id !== booking.rows[0].id) {
       return res.status(403).json({ error: "Access denied" });
     }
 
@@ -1593,8 +1626,8 @@ app.put(
 
       // Check if booking exists and belongs to user
       const booking = await pool.query(
-        "SELECT * FROM bookings WHERE id = $1 AND uid = $2",
-        [bookingId, req.user.uid]
+        "SELECT * FROM bookings WHERE id = $1 AND id = $2",
+        [bookingId, req.user.id]
       );
 
       if (booking.rows.length === 0) {
@@ -1605,9 +1638,9 @@ app.put(
       const updatedBooking = await pool.query(
         `UPDATE bookings 
        SET is_paid = $1, tx_hash = $2, updated_at = CURRENT_TIMESTAMP 
-       WHERE id = $3 AND uid = $4 
+       WHERE id = $3 AND id = $4 
        RETURNING *`,
-        [isPaid, txHash, bookingId, req.user.uid]
+        [isPaid, txHash, bookingId, req.user.id]
       );
 
       res.json({
@@ -1627,8 +1660,8 @@ app.delete("/api/bookings/:bookingId", authenticateToken, async (req, res) => {
 
     // Check if booking exists and belongs to user
     const booking = await pool.query(
-      "SELECT * FROM bookings WHERE id = $1 AND uid = $2",
-      [bookingId, req.user.uid]
+      "SELECT * FROM bookings WHERE id = $1 AND id = $2",
+      [bookingId, req.user.id]
     );
 
     if (booking.rows.length === 0) {
@@ -1636,9 +1669,9 @@ app.delete("/api/bookings/:bookingId", authenticateToken, async (req, res) => {
     }
 
     // Delete booking
-    await pool.query("DELETE FROM bookings WHERE id = $1 AND uid = $2", [
+    await pool.query("DELETE FROM bookings WHERE id = $1 AND id = $2", [
       bookingId,
-      req.user.uid,
+      req.user.id,
     ]);
 
     res.json({ message: "Booking cancelled successfully" });
@@ -1649,53 +1682,251 @@ app.delete("/api/bookings/:bookingId", authenticateToken, async (req, res) => {
 });
 
 // Admin Routes (for managing cars and bookings)
-app.post("/api/admin/cars", authenticateToken, async (req, res) => {
+app.post(
+  "/api/admin/cars",
+  authenticateToken,
+  upload.single("image"),
+  async (req, res) => {
+    try {
+      const { brand, model, year, features, price, is_available } = req.body;
+
+      let imageUrl = null;
+
+      // Upload image to Cloudinary if provided
+      if (req.file) {
+        try {
+          imageUrl = await uploadToCloudinary(
+            req.file.buffer,
+            req.file.originalname
+          );
+        } catch (uploadError) {
+          console.error("Error uploading image:", uploadError);
+          return res.status(500).json({
+            success: false,
+            message: "Failed to upload image",
+          });
+        }
+      }
+
+      // Parse features if it's a string
+      let parsedFeatures = [];
+      if (features) {
+        try {
+          parsedFeatures =
+            typeof features === "string" ? JSON.parse(features) : features;
+        } catch (parseError) {
+          console.error("Error parsing features:", parseError);
+          parsedFeatures = [];
+        }
+      }
+
+      const result = await pool.query(
+        `
+      INSERT INTO cars (brand, model, year, is_available, image, price, features)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING id, brand, model, year, is_available, image, price, features, created_at, updated_at
+    `,
+        [
+          brand,
+          model,
+          parseInt(year),
+          is_available === "true" ? true : false,
+          imageUrl,
+          parseFloat(price),
+          parsedFeatures,
+        ]
+      );
+
+      res.status(201).json({
+        message: "Car added successfully",
+        car: result.rows[0],
+      });
+    } catch (error) {
+      console.error("Error adding car:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
+
+// PUT /api/admin/cars/:id - Update car (admin only)
+app.put(
+  "/api/admin/cars/:id",
+  authenticateToken,
+  upload.single("image"),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { brand, model, year, is_available, price, features } = req.body;
+
+      // Check if car exists
+      const existingCar = await pool.query("SELECT * FROM cars WHERE id = $1", [
+        id,
+      ]);
+      if (existingCar.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: "Car not found",
+        });
+      }
+
+      let imageUrl = existingCar.rows[0].image;
+
+      // Upload new image if provided
+      if (req.file) {
+        try {
+          imageUrl = await uploadToCloudinary(
+            req.file.buffer,
+            req.file.originalname
+          );
+        } catch (uploadError) {
+          console.error("Error uploading image:", uploadError);
+          return res.status(500).json({
+            success: false,
+            message: "Failed to upload image",
+          });
+        }
+      }
+
+      // Parse features if it's a string
+      let parsedFeatures = existingCar.rows[0].features;
+      if (features !== undefined) {
+        try {
+          parsedFeatures =
+            typeof features === "string" ? JSON.parse(features) : features;
+        } catch (parseError) {
+          console.error("Error parsing features:", parseError);
+          parsedFeatures = [];
+        }
+      }
+
+      const result = await pool.query(
+        `
+      UPDATE cars 
+      SET brand = $1, model = $2, year = $3, is_available = $4, image = $5, 
+          price = $6, features = $7, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $8
+      RETURNING id, brand, model, year, is_available, image, price, features, created_at, updated_at
+    `,
+        [
+          brand || existingCar.rows[0].brand,
+          model || existingCar.rows[0].model,
+          year ? parseInt(year) : existingCar.rows[0].year,
+          is_available !== undefined
+            ? is_available === "true"
+            : existingCar.rows[0].is_available,
+          imageUrl,
+          price ? parseFloat(price) : existingCar.rows[0].price,
+          parsedFeatures,
+          id,
+        ]
+      );
+
+      res.json({
+        success: true,
+        message: "Car updated successfully",
+        car: result.rows[0],
+      });
+    } catch (error) {
+      console.error("Error updating car:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to update car",
+      });
+    }
+  }
+);
+
+// PATCH /api/admin/cars/:id/availability - Toggle car availability (admin only)
+app.patch(
+  "/api/admin/cars/:id/availability",
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { is_available } = req.body;
+
+      if (is_available === undefined) {
+        return res.status(400).json({
+          success: false,
+          message: "is_available field is required",
+        });
+      }
+
+      const result = await pool.query(
+        `
+      UPDATE cars 
+      SET is_available = $1, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $2
+      RETURNING id, brand, model, year, is_available, image, price, features, created_at, updated_at
+    `,
+        [is_available, id]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: "Car not found",
+        });
+      }
+
+      res.json({
+        success: true,
+        message: "Car availability updated successfully",
+        car: result.rows[0],
+      });
+    } catch (error) {
+      console.error("Error updating car availability:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to update car availability",
+      });
+    }
+  }
+);
+
+// DELETE /api/admin/cars/:id - Delete car (admin only)
+app.delete("/api/admin/cars/:id", authenticateToken, async (req, res) => {
   try {
-    const {
-      name,
-      brand,
-      model,
-      year,
-      pricePerDay,
-      imageUrl,
-      description,
-      features,
-      transmission,
-      fuelType,
-      seats,
-    } = req.body;
+    const { id } = req.params;
 
-    const carId = uuidv4();
+    // Get car info before deletion for cleanup
+    const carResult = await pool.query("SELECT image FROM cars WHERE id = $1", [
+      id,
+    ]);
 
-    const newCar = await pool.query(
-      `INSERT INTO cars (
-        car_id, name, brand, model, year, price_per_day, image_url, 
-        description, features, transmission, fuel_type, seats
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) 
-      RETURNING *`,
-      [
-        carId,
-        name,
-        brand,
-        model,
-        year,
-        pricePerDay,
-        imageUrl,
-        description,
-        features,
-        transmission,
-        fuelType,
-        seats,
-      ]
-    );
+    if (carResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Car not found",
+      });
+    }
 
-    res.status(201).json({
-      message: "Car added successfully",
-      car: newCar.rows[0],
+    // Delete from database
+    await pool.query("DELETE FROM cars WHERE id = $1", [id]);
+
+    // Optional: Delete image from Cloudinary
+    const imageUrl = carResult.rows[0].image;
+    if (imageUrl) {
+      try {
+        // Extract public_id from Cloudinary URL
+        const publicId = imageUrl.split("/").pop().split(".")[0];
+        await cloudinary.uploader.destroy(`car-rental/cars/${publicId}`);
+      } catch (deleteError) {
+        console.error("Error deleting image from Cloudinary:", deleteError);
+        // Continue with success response even if image deletion fails
+      }
+    }
+
+    res.json({
+      success: true,
+      message: "Car deleted successfully",
     });
   } catch (error) {
-    console.error("Error adding car:", error);
-    res.status(500).json({ error: "Internal server error" });
+    console.error("Error deleting car:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete car",
+    });
   }
 });
 
@@ -1709,11 +1940,9 @@ app.get("/api/admin/bookings", authenticateToken, async (req, res) => {
         c.model as car_name,
         c.brand as car_brand,
         c.image as car_image
-      FROM booking b
+      FROM bookings b
       LEFT JOIN cars c ON b.car_id = c.id
     `);
-
-    console.log("Bookings fetched successfully:", result.rows);
 
     res.json({
       success: true,
@@ -1733,6 +1962,13 @@ app.put(
     try {
       const { id } = req.params;
       const { is_paid } = req.body;
+
+      console.log(
+        "Updating booking status for ID:",
+        id,
+        "to is_paid:",
+        is_paid
+      );
 
       const result = await pool.query(
         "UPDATE bookings SET is_paid = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *",
@@ -1763,7 +1999,7 @@ app.delete("/api/admin/bookings/:id", authenticateToken, async (req, res) => {
     console.log("Deleting booking with ID:", id);
 
     const result = await pool.query(
-      "DELETE FROM booking WHERE uid = $1 RETURNING *",
+      "DELETE FROM bookings WHERE id = $1 RETURNING *",
       [id]
     );
 
@@ -1845,7 +2081,7 @@ app.get("/api/cars/available", async (req, res) => {
 app.post("/api/admin/cars", authenticateToken, async (req, res) => {
   try {
     const { name, brand, price_per_day, image_url } = req.body;
-    const car_id = uuidv4();
+    const car_id = uidv4();
 
     const result = await pool.query(
       `INSERT INTO cars (car_id, name, brand, price_per_day, image_url, available, created_at) 
@@ -2034,8 +2270,6 @@ app.post("/api/payment/midtrans", async (req, res) => {
       [bookingId, orderId, "pending", bookingData.totalAmount]
     );
 
-    console.log("Midtrans transaction created:", transaction);
-
     res.json({
       token: transaction.token,
       redirect_url: transaction.redirect_url,
@@ -2051,14 +2285,8 @@ app.post("/api/payment/midtrans", async (req, res) => {
 // Midtrans webhook handler
 app.post("/api/payment/notification", async (req, res) => {
   try {
-    // const { notification } = req.body;
-
-    console.log(req.body);
-
     // Verify notification
     const statusResponse = await snap.transaction.status(req.body.order_id);
-
-    console.log("Midtrans notification status:", statusResponse);
 
     const orderId = statusResponse.order_id;
     const transactionStatus = statusResponse.transaction_status;
@@ -2103,7 +2331,7 @@ app.post("/api/payment/notification", async (req, res) => {
     // Update booking status
     await pool.query(
       `UPDATE bookings SET payment_status = $1, status = $2, 
-       midtrans_transaction_id = $3, updated_at = CURRENT_TIMESTAMP 
+       midtrans_transaction_id = $3, updated_at = CURRENT_TIMESTAMP, is_paid = true
        WHERE midtrans_order_id = $4`,
       [paymentStatus, bookingStatus, transactionId, orderId]
     );
