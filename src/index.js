@@ -1,6 +1,6 @@
 // 1. Impor dependensi yang diperlukan
 const express = require("express");
-const { Pool } = require("pg");
+
 const cors = require("cors");
 require("dotenv").config();
 const nodemailer = require("nodemailer");
@@ -20,13 +20,6 @@ const app = express();
 const port = process.env.PORT || 4000;
 
 // 3. Konfigurasi koneksi database menggunakan Pool dari pg
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  // Jika menggunakan Neon, SSL mungkin diperlukan
-  ssl: {
-    rejectUnauthorized: false,
-  },
-});
 
 // Cloudinary configuration
 cloudinary.config({
@@ -361,74 +354,19 @@ async function waitForTransactionReceipt(txHash, retries = 5, delay = 3000) {
   }
   throw new Error("Transaction not found after retries");
 }
-// Fungsi untuk verifikasi transaksi di blockchain
-async function verifyTransaction(txHash, expectedAmount, recipientAddress) {
-  try {
-    const receipt = await waitForTransactionReceipt(txHash);
-
-    console.log("Transaction Receipt:", receipt);
-
-    if (!receipt) {
-      return {
-        verified: false,
-        error: "Transaction not found",
-      };
-    }
-
-    const transaction = await web3.eth.getTransaction(txHash);
-
-    // Verifikasi alamat penerima
-    // if (transaction.to.toLowerCase() !== recipientAddress.toLowerCase()) {
-    //   throw new Error("Invalid recipient address");
-    // }
-
-    if (
-      !transaction.to ||
-      transaction.to.toLowerCase() !== recipientAddress.toLowerCase()
-    ) {
-      throw new Error("Invalid recipient address");
-    }
-
-    // Verifikasi jumlah (dalam Wei)
-    const transactionValue = web3.utils.fromWei(transaction.value, "ether");
-    if (parseFloat(transactionValue) < parseFloat(expectedAmount)) {
-      throw new Error("Insufficient payment amount");
-    }
-
-    // Verifikasi konfirmasi blok (minimal 3 konfirmasi)
-    const currentBlock = await web3.eth.getBlockNumber();
-    const confirmations = currentBlock - receipt.blockNumber;
-
-    if (confirmations < 3) {
-      throw new Error("Transaction needs more confirmations");
-    }
-
-    return {
-      verified: true,
-      blockNumber: receipt.blockNumber,
-      confirmations: confirmations,
-      gasUsed: receipt.gasUsed,
-      transactionValue: transactionValue,
-    };
-  } catch (error) {
-    console.error("Blockchain verification error:", error);
-    return {
-      verified: false,
-      error: error.message,
-    };
-  }
-}
 
 // Fungsi untuk menyimpan booking ke database
 async function saveBookingToDatabase(bookingData) {
   const client = await pool.connect();
 
+  console.log(bookingData);
+
   try {
     const query = `
-      INSERT INTO booking (
+      INSERT INTO bookings (
         car_id, start_date, end_date, full_name, 
-        email, phone_number, payment_method, is_paid, tx_hash
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        email, phone_number, payment_method, is_paid, tx_hash, user_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       RETURNING *
     `;
 
@@ -442,6 +380,7 @@ async function saveBookingToDatabase(bookingData) {
       bookingData.payment_method,
       true, // is_paid = true karena sudah verified
       `https://sepolia.etherscan.io/tx/${bookingData.txHash}`, // Menyimpan tx_hash untuk referensi
+      bookingData.user_id,
     ];
 
     const result = await client.query(query, values);
@@ -455,7 +394,11 @@ async function saveBookingToDatabase(bookingData) {
 }
 
 // Fungsi untuk mengirim email konfirmasi
-async function sendConfirmationEmail(booking, car, transactionDetails) {
+async function sendConfirmationEmailBlockchain(
+  booking,
+  car,
+  transactionDetails
+) {
   try {
     const mailOptions = {
       from: `"Turbo Rent" <${process.env.EMAIL_USER}>`,
@@ -489,6 +432,68 @@ async function sendConfirmationEmail(booking, car, transactionDetails) {
           
           <div style="background: #fff3cd; padding: 15px; border-radius: 8px; margin: 20px 0;">
             <p style="margin: 0;"><strong>Catatan:</strong> Pembayaran Anda telah berhasil diverifikasi di blockchain Ethereum Sepolia. Booking Anda telah dikonfirmasi.</p>
+          </div>
+          
+          <div style="text-align: center; margin-top: 30px;">
+            <p style="color: #666;">Terima kasih telah menggunakan layanan kami!</p>
+            <p style="color: #666; font-size: 12px;">Email ini dikirim secara otomatis, mohon tidak membalas.</p>
+          </div>
+        </div>
+      `,
+    };
+
+    await transporter.sendMail(mailOptions);
+    return true;
+  } catch (error) {
+    console.error("Email sending error:", error);
+    return false;
+  }
+}
+
+async function sendConfirmationEmailMidtrans(booking, car, transactionDetails) {
+  console.log("booking", booking);
+  console.log("car", car);
+  console.log("transactionDetails", transactionDetails);
+
+  try {
+    const mailOptions = {
+      from: `"Turbo Rent" <${process.env.EMAIL_USER}>`,
+      to: booking.email,
+      subject: "Konfirmasi Pembayaran - Rental Mobil",
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #333;">Pembayaran Berhasil Dikonfirmasi</h2>
+          
+          <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
+            <h3 style="color: #2c5aa0;">Detail Booking</h3>
+            <p><strong>Booking ID:</strong> ${booking.id}</p>
+            <p><strong>Mobil:</strong> ${car.brand + " " + car.model}</p>
+            <p><strong>Nama:</strong> ${booking.full_name}</p>
+            <p><strong>Email:</strong> ${booking.email}</p>
+            <p><strong>Nomor Telepon:</strong> ${booking.phone_number}</p>
+            <p><strong>Tanggal Mulai:</strong> ${booking.start_date}</p>
+            <p><strong>Tanggal Selesai:</strong> ${booking.end_date}</p>
+          </div>
+          
+          <div style="background: #e8f4f8; padding: 20px; border-radius: 8px; margin: 20px 0;">
+            <h3 style="color: #2c5aa0;">Detail Transaksi Pembayaran</h3>
+            <p><strong>Order ID:</strong> ${transactionDetails.orderId}</p>
+            <p><strong>Transaction ID:</strong> ${
+              transactionDetails.transactionId
+            }</p>
+            <p><strong>Metode Pembayaran:</strong> ${
+              transactionDetails.paymentType
+            }</p>
+            <p><strong>Status Transaksi:</strong> ${
+              transactionDetails.transactionStatus
+            }</p>
+            <p><strong>Status Pembayaran:</strong> <span style="color: #4caf50; font-weight: bold;">${
+              transactionDetails.paymentStatus
+            } ✓</span></p>
+          </div>
+          
+          <div style="background: #fff3cd; padding: 15px; border-radius: 8px; margin: 20px 0;">
+            <p style="margin: 0;"><strong>Catatan:</strong> Pembayaran Anda telah berhasil diverifikasi melalui Midtrans. Booking Anda telah dikonfirmasi.</p>
           </div>
           
           <div style="text-align: center; margin-top: 30px;">
@@ -673,30 +678,17 @@ app.post("/api/payment", async (req, res) => {
       });
     }
 
-    // 1. Verifikasi transaksi di blockchain Ethereum Sepolia
-    // const verificationResult = await verifyTransaction(
-    //   paymentData.txHash,
-    //   paymentData.amount,
-    //   paymentData.recipientAddress
-    // );
-
-    // if (!verificationResult.verified) {
-    //   res.status(400).json({
-    //     error: "Transaction verification failed",
-    //     details: verificationResult.error,
-    //   });
-    // }
-
     // 2. Simpan detail pemesanan dan pembayaran ke database
     const bookingData = {
-      car_id: paymentData.carId,
-      start_date: paymentData.startDate,
-      end_date: paymentData.endDate,
+      car_id: paymentData.car_id,
+      start_date: paymentData.start_date,
+      end_date: paymentData.end_date,
       full_name: paymentData.customerName,
       email: paymentData.customerEmail,
       phone_number: paymentData.customerPhone,
-      payment_method: paymentData.paymentMethod,
+      payment_method: paymentData.payment_method,
       txHash: paymentData.txHash,
+      user_id: paymentData.user_id,
     };
 
     const savedBooking = await saveBookingToDatabase(bookingData);
@@ -707,7 +699,9 @@ app.post("/api/payment", async (req, res) => {
       amount: paymentData.amount,
     };
 
-    const emailSent = await sendConfirmationEmail(
+    console.log("savedBooking", savedBooking);
+
+    const emailSent = await sendConfirmationEmailBlockchain(
       savedBooking,
       paymentData.car,
       transactionDetails
@@ -1279,15 +1273,16 @@ app.post(
         });
       }
 
-      const {
+      const { name, email, phone, subject, message, serviceType } = req.body;
+
+      console.log("Contact form submitted:", {
         name,
         email,
         phone,
         subject,
         message,
         serviceType,
-        agreeToTerms,
-      } = req.body;
+      });
 
       // Verify required environment variables
       if (!process.env.EMAIL_PASSWORD) {
@@ -1316,7 +1311,7 @@ app.post(
 
       // Email options for auto-reply
       const autoReplyOptions = {
-        from: process.env.EMAIL_USER,
+        from: `"Turbo Rent" <${process.env.EMAIL_USER}>`,
         to: email,
         subject: "Thank you for contacting CarRental",
         html: createAutoReplyTemplate(name),
@@ -2328,6 +2323,29 @@ app.post("/api/payment/notification", async (req, res) => {
       paymentStatus = "pending";
     }
 
+    const transactionDetails = {
+      orderId: statusResponse.order_id,
+      transactionId: statusResponse.transaction_id,
+      paymentType: statusResponse.payment_type,
+      transactionStatus: statusResponse.transaction_status,
+      paymentStatus: paymentStatus, // yang sudah dihitung di webhook
+    };
+
+    const booking = await pool.query(
+      `SELECT * FROM bookings WHERE midtrans_order_id = $1`,
+      [orderId]
+    );
+
+    const car = await pool.query(`SELECT * FROM cars WHERE id = $1`, [
+      booking.rows[0].car_id,
+    ]);
+
+    const emailSent = await sendConfirmationEmailMidtrans(
+      booking.rows[0],
+      car.rows[0],
+      transactionDetails
+    );
+
     // Update booking status
     await pool.query(
       `UPDATE bookings SET payment_status = $1, status = $2, 
@@ -2344,7 +2362,7 @@ app.post("/api/payment/notification", async (req, res) => {
       [paymentStatus, transactionId, paymentType, orderId]
     );
 
-    res.status(200).json({ status: "success" });
+    res.status(200).json({ status: "success", emailSent });
   } catch (error) {
     console.error("Webhook error:", error);
     res.status(500).json({ error: "Webhook processing failed" });
