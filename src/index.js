@@ -3,16 +3,13 @@ const express = require("express");
 
 const cors = require("cors");
 require("dotenv").config();
-const nodemailer = require("nodemailer");
 const { Web3 } = require("web3");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const { body, validationResult } = require("express-validator");
 const rateLimit = require("express-rate-limit");
-const midtransClient = require("midtrans-client");
 const multer = require("multer");
-const cloudinary = require("cloudinary").v2;
 
 // 2. Inisialisasi aplikasi Express
 const app = express();
@@ -20,13 +17,6 @@ const app = express();
 const port = process.env.PORT || 4000;
 
 // 3. Konfigurasi koneksi database menggunakan Pool dari pg
-
-// Cloudinary configuration
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-});
 
 // Multer configuration for file uploads
 const storage = multer.memoryStorage();
@@ -325,15 +315,6 @@ const createAutoReplyTemplate = (name) => {
 // Konfigurasi Web3 untuk Ethereum Sepolia
 
 const web3 = new Web3(process.env.SEPOLIA_RPC_URL);
-
-// Konfigurasi Nodemailer
-const transporter = nodemailer.createTransport({
-  service: "gmail", // atau provider email lainnya
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASSWORD,
-  },
-});
 
 // 4. Middleware untuk parsing body JSON dari request
 app.use(
@@ -950,10 +931,7 @@ app.post("/api/auth/login", async (req, res) => {
     if (user.role === "admin") {
       res.cookie("role", "admin", {
         path: "/",
-        httpOnly: false, // Cookie tidak bisa diakses oleh JavaScript sisi klien
-        // secure: true, // Hanya kirim melalui HTTPS di lingkungan produksi
-        // sameSite: "strict", // Proteksi dari serangan CSRF
-        // maxAge: 3600000 * 24, // Masa berlaku cookie (1 jam dalam milidetik)
+        httpOnly: false,
       });
       return res.json({
         success: true,
@@ -2177,12 +2155,6 @@ app.get("/api/admin/stats", authenticateToken, async (req, res) => {
     console.error("Error fetching stats:", error);
     res.status(500).json({ message: "Server error" });
   }
-});
-
-const snap = new midtransClient.Snap({
-  isProduction: false,
-  serverKey: process.env.MIDTRANS_SERVER_KEY,
-  clientKey: process.env.MIDTRANS_CLIENT_KEY,
 });
 
 // Create booking and payment
