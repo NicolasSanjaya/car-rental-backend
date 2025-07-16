@@ -1,9 +1,8 @@
 const express = require("express");
 const router = express.Router();
-const contactController = require("../controllers/contactController");
-const { contactenticateToken } = require("../middleware/contactMiddleware");
-const contactLimiter = require("../middleware/limiterMiddleware");
-const validateContactForm = require("../middleware/validationMiddleware");
+const contactController = require("../controllers/contactController.js");
+const contactLimiter = require("../middleware/limiterMiddleware.js");
+const validateContactForm = require("../middleware/validationMiddleware.js");
 
 router.post(
   "/contact",

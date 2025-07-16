@@ -1,5 +1,9 @@
 const { validationResult } = require("express-validator");
-const { createContactEmailTemplate } = require("../utils/emailHelper");
+const {
+  createContactEmailTemplate,
+  createConfirmationEmailTemplate,
+  sendEmail,
+} = require("../utils/emailHelper.js");
 
 exports.sendContactForm = async (req, res, next) => {
   try {
@@ -44,18 +48,15 @@ exports.sendContactForm = async (req, res, next) => {
     const autoReplyOptions = {
       from: `"Turbo Rent" <${process.env.EMAIL_USER}>`,
       to: email,
-      subject: "Thank you for contacting CarRental",
-      html: createAutoReplyTemplate(name),
+      subject: "Thank you for contacting Turbo Rent",
+      html: createConfirmationEmailTemplate(name),
     };
 
     // Send emails
     const [adminResult, autoReplyResult] = await Promise.all([
-      transporter.sendMail(adminMailOptions),
-      transporter.sendMail(autoReplyOptions),
+      sendEmail(adminMailOptions),
+      sendEmail(autoReplyOptions),
     ]);
-
-    console.log("Admin email sent:", adminResult.messageId);
-    console.log("Auto-reply sent:", autoReplyResult.messageId);
 
     res.json({
       success: true,
@@ -83,9 +84,6 @@ exports.sendContactForm = async (req, res, next) => {
       });
     }
 
-    res.status(500).json({
-      success: false,
-      message: "Failed to send message. Please try again later.",
-    });
+    next(error);
   }
 };

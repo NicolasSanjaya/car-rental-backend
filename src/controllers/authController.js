@@ -1,13 +1,15 @@
 // controllers/authController.js
-const UserModel = require("../models/userModel");
+const pool = require("../config/db.js");
+const UserModel = require("../models/userModel.js");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+require("dotenv").config();
 const JWT_SECRET = process.env.JWT_SECRET;
-const { isValidEmail, isValidPassword } = require("../utils/validation");
+const { isValidEmail, isValidPassword } = require("../utils/authHelper.js");
 const {
   createResetPasswordEmailTemplate,
   sendEmail,
-} = require("../utils/emailHelper");
+} = require("../utils/emailHelper.js");
 
 exports.register = async (req, res, next) => {
   try {
@@ -43,7 +45,7 @@ exports.register = async (req, res, next) => {
       });
     }
 
-    const existingUser = await UserModel.findByEmail(
+    const existingUser = await UserModel.findUserById(
       email.toLowerCase().trim()
     );
 
@@ -53,7 +55,7 @@ exports.register = async (req, res, next) => {
         .json({ success: false, message: "Email already registered" });
     }
 
-    const newUser = await UserModel.create({ full_name, email, password });
+    const newUser = await UserModel.createUser({ full_name, email, password });
 
     // Generate token (logika token bisa juga di-abstraksi ke helper)
     const token = jwt.sign(
@@ -99,7 +101,10 @@ exports.login = async (req, res, next) => {
       });
     }
 
-    const user = await UserModel.findByEmail(email.toLowerCase().trim());
+    let user = await pool.query("SELECT * FROM users WHERE email = $1", [
+      email.toLowerCase().trim(),
+    ]);
+    user = user.rows[0];
     if (!user) {
       return res
         .status(401)
@@ -161,27 +166,39 @@ exports.login = async (req, res, next) => {
 exports.getProfile = async (req, res, next) => {
   try {
     // ID pengguna didapat dari token JWT yang sudah diverifikasi oleh middleware
-    const user = await UserModel.findById(req.user.id);
+    const user = await UserModel.findUserById(req.user.id);
     if (!user) {
       return res
         .status(404)
         .json({ success: false, message: "User not found" });
     }
     if (user.role === "admin") {
-      res.cookie("role", "admin", {
-        path: "/",
-        httpOnly: false,
-      });
       return res.json({
         success: true,
-        message: "Login successful",
-        data: { user, token },
+        message: "Profile retrieved successfully",
+        data: {
+          user: {
+            id: user.id,
+            full_name: user.full_name,
+            email: user.email,
+            role: user.role,
+            created_at: user.created_at,
+          },
+        },
       });
     } else if (user.role === "user") {
       return res.json({
         success: true,
-        message: "Login successful",
-        data: { user, token },
+        message: "Profile retrieved successfully",
+        data: {
+          user: {
+            id: user.id,
+            full_name: user.full_name,
+            email: user.email,
+            role: user.role,
+            created_at: user.created_at,
+          },
+        },
       });
     }
   } catch (error) {
@@ -247,7 +264,7 @@ exports.forgotPassword = async (req, res, next) => {
     }
 
     // Cari user berdasarkan email
-    const user = await UserModel.findByEmail(email);
+    const user = await UserModel.findUserByEmail(email);
 
     if (!user) {
       return res.status(404).json({
@@ -268,8 +285,17 @@ exports.forgotPassword = async (req, res, next) => {
     const resetToken = crypto.randomBytes(32).toString("hex");
     const resetTokenExpiry = new Date(Date.now() + 60 * 60 * 1000); // 1 jam dari sekarang
 
+    const updateQuery = `
+      UPDATE users 
+      SET reset_password_token = $1, reset_password_expiry = $2
+      WHERE id = $3
+    `;
     // Simpan token dan expiry ke database
-    const update = UserModel.update(user.id, user);
+    const update = await pool.query(updateQuery, [
+      resetToken,
+      resetTokenExpiry,
+      user.id,
+    ]);
 
     // Buat reset URL
     const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`;

@@ -1,24 +1,23 @@
-const pool = require("../config/db");
+const pool = require("../config/db.js");
 const bcrypt = require("bcrypt");
 
 const UserModel = {
-  async findByEmail(email) {
-    const result = await pool.query(
-      "SELECT id, full_name, email FROM users WHERE email = $1",
-      [email]
-    );
+  async findUserByEmail(email) {
+    const result = await pool.query("SELECT * FROM users WHERE email = $1", [
+      email,
+    ]);
     return result.rows[0];
   },
 
-  async findById(id) {
+  async findUserById(id) {
     const result = await pool.query(
-      "SELECT id, full_name, email FROM users WHERE id = $1",
+      "SELECT id, full_name, email, role FROM users WHERE id = $1",
       [id]
     );
     return result.rows[0];
   },
 
-  async create(user) {
+  async createUser(user) {
     const { full_name, email, password } = user;
     const saltRounds = 12;
     const passwordHash = await bcrypt.hash(password, saltRounds);
@@ -30,7 +29,7 @@ const UserModel = {
     return result.rows[0];
   },
 
-  async update(id, user) {
+  async updateUser(id, user) {
     const { full_name, email, reset_password_token, reset_password_expiry } =
       user;
 
@@ -43,7 +42,7 @@ const UserModel = {
     }
 
     const result = await pool.query(
-      "UPDATE users SET full_name = $1, email = $2 WHERE id = $3 RETURNING *",
+      "UPDATE users SET full_name = $1, email = $2 WHERE id = $3 RETURNING id, full_name, email",
       [full_name, email.toLowerCase().trim(), id]
     );
     return result.rows[0];

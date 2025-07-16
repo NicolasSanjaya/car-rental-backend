@@ -1,11 +1,77 @@
 // utils/emailHelper.js
-const transporter = require("../config/mailer");
+const transporter = require("../config/mailer.js");
 require("dotenv").config();
 
 // Pindahkan template email ke sini
 const createConfirmationEmailTemplate = (data) => {
-  // ... isi template HTML
-  return `... HTML Confirmation Email ...`;
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Thank You for Contacting Us</title>
+      <style>
+        body {
+          font-family: Arial, sans-serif;
+          line-height: 1.6;
+          color: #333;
+          max-width: 600px;
+          margin: 0 auto;
+          padding: 20px;
+        }
+        .header {
+          background-color: #ef4444;
+          color: white;
+          padding: 20px;
+          text-align: center;
+          border-radius: 5px 5px 0 0;
+        }
+        .content {
+          background-color: #f9f9f9;
+          padding: 30px;
+          border-radius: 0 0 5px 5px;
+        }
+        .footer {
+          margin-top: 30px;
+          padding-top: 20px;
+          border-top: 1px solid #ddd;
+          font-size: 12px;
+          color: #666;
+          text-align: center;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="header">
+        <h1>Thank You for Contacting Us!</h1>
+        <p>CarRental</p>
+      </div>
+      
+      <div class="content">
+        <h2>Hello ${name},</h2>
+        
+        <p>Thank you for reaching out to us. We have received your message and will get back to you as soon as possible.</p>
+        
+        <p>Our team typically responds within 24 hours during business hours:</p>
+        <ul>
+          <li>Monday - Friday: 8:00 AM - 8:00 PM</li>
+          <li>Saturday - Sunday: 9:00 AM - 6:00 PM</li>
+        </ul>
+        
+        <p>If you need immediate assistance, please don't hesitate to call our emergency support line at <strong>+1 (555) 911-HELP</strong>.</p>
+        
+        <p>Best regards,<br>
+        The CarRental Team</p>
+      </div>
+      
+      <div class="footer">
+        <p>CarRental | 123 Main Street, City, State 12345</p>
+        <p>Phone: +1 (555) 123-4567 | Email: info@carrental.com</p>
+      </div>
+    </body>
+    </html>
+  `;
 };
 
 const createResetPasswordEmailTemplate = (resetUrl) => {
