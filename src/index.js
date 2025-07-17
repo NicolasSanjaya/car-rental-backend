@@ -51,6 +51,8 @@ app.use((err, req, res, next) => {
 });
 
 // Jalankan server
-app.listen(port, () => {
-  console.log(`Server running at http://localhost:${port}`);
-});
+// app.listen(port, () => {
+//   console.log(`Server running at http://localhost:${port}`);
+// });
+
+module.exports = app;
