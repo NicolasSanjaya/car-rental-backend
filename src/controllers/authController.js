@@ -11,6 +11,28 @@ const {
   sendEmail,
 } = require("../utils/emailHelper.js");
 
+exports.checkExistingUser = async (req, res, next) => {
+  try {
+    const { email } = req.body;
+    const existingUser = await pool.query(
+      "SELECT email FROM users WHERE email = $1",
+      [email.toLowerCase().trim()]
+    );
+    if (existingUser.rows.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Email already exists",
+      });
+    }
+    res.status(200).json({
+      success: true,
+      message: "Email is available",
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 exports.register = async (req, res, next) => {
   try {
     const { full_name, email, password } = req.body;
@@ -45,11 +67,14 @@ exports.register = async (req, res, next) => {
       });
     }
 
-    const existingUser = await UserModel.findUserById(
-      email.toLowerCase().trim()
+    const existingUser = await pool.query(
+      "SELECT email FROM users WHERE email = $1",
+      [email.toLowerCase().trim()]
     );
 
-    if (existingUser) {
+    console.log({ existingUser });
+
+    if (existingUser.rows.length > 0) {
       return res
         .status(400)
         .json({ success: false, message: "Email already registered" });
@@ -138,7 +163,10 @@ exports.login = async (req, res, next) => {
     if (user.role === "admin") {
       res.cookie("role", "admin", {
         path: "/",
-        httpOnly: false,
+        httpOnly: true,
+        secure: true,
+        sameSite: "strict",
+        maxAge: 3600000 * 24,
       });
       return res.json({
         success: true,

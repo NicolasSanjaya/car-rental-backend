@@ -3,7 +3,7 @@ const transporter = require("../config/mailer.js");
 require("dotenv").config();
 
 // Pindahkan template email ke sini
-const createConfirmationEmailTemplate = (data) => {
+const createConfirmationEmailTemplate = (name) => {
   return `
     <!DOCTYPE html>
     <html>
@@ -207,6 +207,120 @@ const createContactEmailTemplate = (data) => {
   `;
 };
 
+async function sendConfirmationEmailBlockchain(
+  booking,
+  car,
+  transactionDetails
+) {
+  try {
+    const mailOptions = {
+      from: `"Turbo Rent" <${process.env.EMAIL_USER}>`,
+      to: booking.email,
+      subject: "Konfirmasi Pembayaran - Rental Mobil",
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #333;">Pembayaran Berhasil Dikonfirmasi</h2>
+          
+          <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
+            <h3 style="color: #2c5aa0;">Detail Booking</h3>
+            <p><strong>Booking ID:</strong> ${booking.id}</p>
+            <p><strong>Mobil:</strong> ${car.brand + " " + car.model}</p>
+            <p><strong>Nama:</strong> ${booking.full_name}</p>
+            <p><strong>Email:</strong> ${booking.email}</p>
+            <p><strong>Nomor Telepon:</strong> ${booking.phone_number}</p>
+            <p><strong>Tanggal Mulai:</strong> ${booking.start_date}</p>
+            <p><strong>Tanggal Selesai:</strong> ${booking.end_date}</p>
+          </div>
+          
+          <div style="background: #e8f4f8; padding: 20px; border-radius: 8px; margin: 20px 0;">
+            <h3 style="color: #2c5aa0;">Detail Transaksi Blockchain</h3>
+            <p><strong>Transaction Hash:</strong> ${
+              transactionDetails.txHash
+            }</p>
+            <p><strong>Jumlah Pembayaran:</strong> ${
+              transactionDetails.amount
+            } ETH</p>
+            <p><strong>Status:</strong> <span style="color: #4caf50; font-weight: bold;">Verified ✓</span></p>
+          </div>
+          
+          <div style="background: #fff3cd; padding: 15px; border-radius: 8px; margin: 20px 0;">
+            <p style="margin: 0;"><strong>Catatan:</strong> Pembayaran Anda telah berhasil diverifikasi di blockchain Ethereum Sepolia. Booking Anda telah dikonfirmasi.</p>
+          </div>
+          
+          <div style="text-align: center; margin-top: 30px;">
+            <p style="color: #666;">Terima kasih telah menggunakan layanan kami!</p>
+            <p style="color: #666; font-size: 12px;">Email ini dikirim secara otomatis, mohon tidak membalas.</p>
+          </div>
+        </div>
+      `,
+    };
+
+    await transporter.sendMail(mailOptions);
+    return true;
+  } catch (error) {
+    console.error("Email sending error:", error);
+    return false;
+  }
+}
+
+async function sendConfirmationEmailMidtrans(booking, car, transactionDetails) {
+  try {
+    const mailOptions = {
+      from: `"Turbo Rent" <${process.env.EMAIL_USER}>`,
+      to: booking.email,
+      subject: "Konfirmasi Pembayaran - Rental Mobil",
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #333;">Pembayaran Berhasil Dikonfirmasi</h2>
+          
+          <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
+            <h3 style="color: #2c5aa0;">Detail Booking</h3>
+            <p><strong>Booking ID:</strong> ${booking.id}</p>
+            <p><strong>Mobil:</strong> ${car.brand + " " + car.model}</p>
+            <p><strong>Nama:</strong> ${booking.full_name}</p>
+            <p><strong>Email:</strong> ${booking.email}</p>
+            <p><strong>Nomor Telepon:</strong> ${booking.phone_number}</p>
+            <p><strong>Tanggal Mulai:</strong> ${booking.start_date}</p>
+            <p><strong>Tanggal Selesai:</strong> ${booking.end_date}</p>
+          </div>
+          
+          <div style="background: #e8f4f8; padding: 20px; border-radius: 8px; margin: 20px 0;">
+            <h3 style="color: #2c5aa0;">Detail Transaksi Pembayaran</h3>
+            <p><strong>Order ID:</strong> ${transactionDetails.orderId}</p>
+            <p><strong>Transaction ID:</strong> ${
+              transactionDetails.transactionId
+            }</p>
+            <p><strong>Metode Pembayaran:</strong> ${
+              transactionDetails.paymentType
+            }</p>
+            <p><strong>Status Transaksi:</strong> ${
+              transactionDetails.transactionStatus
+            }</p>
+            <p><strong>Status Pembayaran:</strong> <span style="color: #4caf50; font-weight: bold;">${
+              transactionDetails.paymentStatus
+            } ✓</span></p>
+          </div>
+          
+          <div style="background: #fff3cd; padding: 15px; border-radius: 8px; margin: 20px 0;">
+            <p style="margin: 0;"><strong>Catatan:</strong> Pembayaran Anda telah berhasil diverifikasi melalui Midtrans. Booking Anda telah dikonfirmasi.</p>
+          </div>
+          
+          <div style="text-align: center; margin-top: 30px;">
+            <p style="color: #666;">Terima kasih telah menggunakan layanan kami!</p>
+            <p style="color: #666; font-size: 12px;">Email ini dikirim secara otomatis, mohon tidak membalas.</p>
+          </div>
+        </div>
+      `,
+    };
+
+    await transporter.sendMail(mailOptions);
+    return true;
+  } catch (error) {
+    console.error("Email sending error:", error);
+    return false;
+  }
+}
+
 const sendEmail = async (mailOptions) => {
   try {
     const info = await transporter.sendMail(mailOptions);
@@ -223,4 +337,6 @@ module.exports = {
   createConfirmationEmailTemplate,
   createResetPasswordEmailTemplate,
   createContactEmailTemplate,
+  sendConfirmationEmailBlockchain,
+  sendConfirmationEmailMidtrans,
 };

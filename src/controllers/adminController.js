@@ -2,6 +2,7 @@ const CarModel = require("../models/carModel.js");
 const BookingModel = require("../models/bookingModel.js");
 const { uploadToCloudinary } = require("../utils/cloudinaryHelper.js");
 const pool = require("../config/db.js");
+const cloudinary = require("cloudinary").v2;
 
 exports.addCars = async (req, res, next) => {
   try {
@@ -216,18 +217,11 @@ exports.deleteCars = async (req, res, next) => {
       }
     }
 
-    if (!deleteCar) {
-      return res.status(404).json({
-        success: false,
-        message: "Car not found",
-      });
-    } else {
-      return res.status(200).json({
-        success: true,
-        message: "Car deleted successfully",
-        car: deleteCar,
-      });
-    }
+    return res.status(200).json({
+      success: true,
+      message: "Car deleted successfully",
+      car: deleteCar,
+    });
   } catch (error) {
     next(error);
   }

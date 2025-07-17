@@ -1,4 +1,82 @@
 const pool = require("../config/db.js");
+const BookingModel = require("../models/bookingModel.js");
+const {
+  sendConfirmationEmailBlockchain,
+  sendConfirmationEmailMidtrans,
+} = require("../utils/emailHelper.js");
+const snap = require("../config/midtrans.js");
+
+exports.mainPayment = async (req, res, next) => {
+  try {
+    const { paymentData } = req.body;
+    if (paymentData === undefined) {
+      res.status(400).json({
+        error: "Payment data is required",
+      });
+    }
+    // Validasi input yang diperlukan
+    if (
+      !paymentData.txHash ||
+      !paymentData.amount ||
+      !paymentData.recipientAddress
+    ) {
+      res.status(400).json({
+        error: "Missing required fields: txHash, amount, recipientAddress",
+      });
+    }
+
+    // 2. Simpan detail pemesanan dan pembayaran ke database
+    const bookingData = {
+      car_id: paymentData.car_id,
+      start_date: paymentData.start_date,
+      end_date: paymentData.end_date,
+      full_name: paymentData.customerName,
+      email: paymentData.customerEmail,
+      phone_number: paymentData.customerPhone,
+      payment_method: paymentData.payment_method,
+      txHash: paymentData.txHash,
+      user_id: paymentData.user_id,
+    };
+
+    const savedBooking = await BookingModel.saveBookingToDatabase(bookingData);
+
+    // 3. Kirim email konfirmasi ke pelanggan
+    const transactionDetails = {
+      txHash: paymentData.txHash,
+      amount: paymentData.amount,
+    };
+
+    console.log("savedBooking", savedBooking);
+
+    const emailSent = await sendConfirmationEmailBlockchain(
+      savedBooking,
+      paymentData.car,
+      transactionDetails
+    );
+
+    // Mengirim respons sukses
+    return res.status(200).json({
+      success: true,
+      message: "Payment processed successfully",
+      data: {
+        bookingId: savedBooking.id,
+        transactionVerified: true,
+        emailSent: emailSent,
+        txHash: paymentData.txHash,
+        amount: paymentData.amount,
+        recipientAddress: paymentData.recipientAddress,
+      },
+    });
+  } catch (error) {
+    console.error("Payment processing error:", error);
+
+    // Mengirim respons error dengan status 500
+    return res.status(500).json({
+      error: "Payment processing error",
+      details: error.message,
+    });
+  }
+};
 
 exports.createPayment = async (req, res, next) => {
   try {

@@ -3,6 +3,7 @@ const router = express.Router();
 const authController = require("../controllers/authController.js");
 const { authenticateToken } = require("../middleware/authMiddleware.js");
 
+router.post("/check-existing-user", authController.checkExistingUser);
 router.post("/register", authController.register);
 router.post("/login", authController.login);
 router.post("/logout", authenticateToken, authController.logout); // Logout perlu token

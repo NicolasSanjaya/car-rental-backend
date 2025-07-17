@@ -2,19 +2,51 @@ const CarModel = require("../models/carModel.js");
 const pool = require("../config/db.js");
 
 exports.getAllCars = async (req, res, next) => {
-  try {
-    const result = await CarModel.findAllCars();
+  // Filter mobil berdasarkan query parameters
+  // Contoh: /cars?brand=Daihatsu&year=2020&available=true
+  const { brand, year, available } = req.query;
 
-    if (result) {
+  try {
+    if (brand || year || available !== undefined) {
+      const data = await pool.query(
+        "SELECT * FROM cars ORDER BY created_at ASC"
+      );
+
+      let filteredCars = data.rows;
+
+      if (brand) {
+        filteredCars = filteredCars.filter((car) =>
+          car.brand.toLowerCase().includes(brand.toLowerCase())
+        );
+      }
+
+      if (year) {
+        filteredCars = filteredCars.filter(
+          (car) => car.year.toString() === year
+        );
+      }
+
+      if (available !== undefined) {
+        filteredCars = filteredCars.filter(
+          (car) => car.is_available === (available === "true")
+        );
+      }
+
       return res.json({
-        success: true,
-        message: "Cars fetched successfully",
-        data: result,
+        status: true,
+        message: "List of cars",
+        data: filteredCars,
+        count: filteredCars.length,
       });
     } else {
-      return res.status(404).json({
-        success: false,
-        message: "No cars found",
+      const data = await pool.query(
+        "SELECT * FROM cars ORDER BY created_at ASC"
+      );
+      return res.json({
+        status: true,
+        message: "List of cars",
+        data: data.rows,
+        count: data.rows.length,
       });
     }
   } catch (error) {
@@ -65,6 +97,24 @@ exports.getAvailableCars = async (req, res, next) => {
         success: false,
         message: "No available cars found",
       });
+    }
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getCarById = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const car = await CarModel.findCarById(id);
+    if (car) {
+      return res.json({
+        success: true,
+        message: "Car fetched successfully",
+        data: car,
+      });
+    } else {
+      return res.status(404).json({ error: "Car not found" });
     }
   } catch (error) {
     next(error);

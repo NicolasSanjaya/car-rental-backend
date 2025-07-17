@@ -14,7 +14,7 @@ const BookingModel = {
       ORDER BY b.created_at DESC`,
       [id]
     );
-    return result.rows[0];
+    return result.rows;
   },
 
   async findBookingById(id) {
@@ -111,6 +111,43 @@ const BookingModel = {
   async deleteBooking(id) {
     const result = await pool.query("DELETE FROM bookings WHERE id = $1", [id]);
     return result.rows[0];
+  },
+
+  async saveBookingToDatabase(bookingData) {
+    const client = await pool.connect();
+
+    console.log(bookingData);
+
+    try {
+      const query = `
+      INSERT INTO bookings (
+        car_id, start_date, end_date, full_name, 
+        email, phone_number, payment_method, is_paid, tx_hash, user_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      RETURNING *
+    `;
+
+      const values = [
+        bookingData.car_id,
+        bookingData.start_date,
+        bookingData.end_date,
+        bookingData.full_name,
+        bookingData.email,
+        bookingData.phone_number,
+        bookingData.payment_method,
+        true, // is_paid = true karena sudah verified
+        `https://sepolia.etherscan.io/tx/${bookingData.txHash}`, // Menyimpan tx_hash untuk referensi
+        bookingData.user_id,
+      ];
+
+      const result = await client.query(query, values);
+      return result.rows[0];
+    } catch (error) {
+      console.error("Database error:", error);
+      throw error;
+    } finally {
+      client.release();
+    }
   },
 
   // ... Tambahkan fungsi model lain seperti update, delete, dll.

@@ -7,7 +7,7 @@ const carRoutes = require("./carRoutes.js");
 const bookingRoutes = require("./bookingRoutes.js");
 const paymentRoutes = require("./paymentRoutes.js");
 const adminRoutes = require("./adminRoutes.js");
-const contactRoutes = require("./carRoutes.js");
+const contactRoutes = require("./contactRoutes.js");
 const userRoutes = require("./userRoutes.js");
 
 router.use("/api/auth", authRoutes);
